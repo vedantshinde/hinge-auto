@@ -80,6 +80,12 @@ What's the ONE change you'd make first?
 Be direct. Use plain ASCII. No emojis. Markdown headers OK."""
 
 
+# Label that must be on screen after this flow's first navigation tap
+# (ui.require_label). Read from the phone with ui.ui_texts(); None =
+# not captured yet, check skipped.
+VIEW_LABEL: str | None = "View"
+
+
 def navigate_to_self_view() -> None:
     """Discover -> self-pfp -> avatar -> View tab. Assumes Hinge is
     open on Discover when called."""
@@ -90,6 +96,8 @@ def navigate_to_self_view() -> None:
     adb.tap(*c["self_avatar"])
     adb.jitter_sleep("after_tap")
     time.sleep(1.0)
+    import ui
+    ui.require_label(VIEW_LABEL, step="scan_self: profile editor")
     adb.tap(*c["view_tab"])
     adb.jitter_sleep("after_tap")
     time.sleep(1.0)
@@ -116,13 +124,13 @@ def capture_self_frames(n_frames: int = DEFAULT_FRAMES) -> list[bytes]:
 
 
 def return_to_discover() -> None:
-    """Back-arrow twice, then tap Discover in bottom nav."""
+    """Back-arrow (SELF_VIEW_BACK_TAPS times: 2 on the emulator, 1 on the
+    S23 where one Back from View lands on Profile Hub), then Discover."""
     c = config.COORDS
-    adb.tap(*c["back_arrow"])
-    time.sleep(0.8)
-    adb.tap(*c["back_arrow"])
-    time.sleep(0.8)
-    adb.tap(*c["nav_discover"])
+    for _ in range(config.SELF_VIEW_BACK_TAPS):
+        adb.tap(*c["back_arrow"], target="back_arrow")
+        time.sleep(0.8)
+    adb.tap(*c["nav_discover"], target="nav_discover")
     time.sleep(1.0)
 
 

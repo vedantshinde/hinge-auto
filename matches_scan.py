@@ -45,6 +45,13 @@ load_dotenv()
 
 
 COORDS_PATH = config.BASE_DIR / "matches_coords.json"
+
+# Label that must be on screen after this flow's first navigation tap
+# (ui.require_label). Read from the phone with ui.ui_texts(); None =
+# not captured yet, check skipped.
+# "Your turn"/"Their turn" are section headers from the emulator era; not yet
+# seen on the S23 (no matches when measured).
+MATCHES_LABELS: tuple[str, ...] | None = ("No matches right now", "Your turn", "Their turn")
 LOG_PATH = config.DEBUG_DIR / "matches_log.jsonl"
 DEFAULT_FRAMES = 4
 
@@ -53,13 +60,10 @@ DEFAULT_FRAMES = 4
 
 
 def _load_coords() -> dict:
-    if not COORDS_PATH.exists():
-        raise SystemExit(
-            f"missing {COORDS_PATH.name} — run "
-            f"`python calibrate_matches.py` first to record the matches "
-            f"tab tap coordinate."
-        )
-    return json.loads(COORDS_PATH.read_text(encoding="utf-8"))
+    try:
+        return config.load_device_json(COORDS_PATH, "python calibrate_matches.py")
+    except RuntimeError as e:
+        raise SystemExit(str(e))
 
 
 # ---------- capture ----------
@@ -69,8 +73,10 @@ def open_matches_tab() -> None:
     """Tap the Matches/Conversations icon in the bottom nav."""
     coords = _load_coords()
     x, y = coords["matches_tab"]
-    adb.tap(x, y)
+    adb.tap(x, y, target="matches_tab")
     adb.jitter_sleep("after_tap")
+    import ui
+    ui.require_label(MATCHES_LABELS, step="matches: Matches tab")
     # Hinge's matches view loads progressively (avatars first, then text).
     # An extra short pause makes the first screenshot reliable.
     time.sleep(1.2)
@@ -81,7 +87,8 @@ def _scroll_matches() -> None:
     global discover-feed scroll). A larger scroll in the matches view
     triggers Hinge's section-collapse behavior on the active section,
     so we keep the gesture short."""
-    adb.swipe(540, 1900, 540, 1500, 400)
+    adb.swipe(*config.COORDS["matches_scroll_from"],
+              *config.COORDS["matches_scroll_to"], 400)
     adb.jitter_sleep("after_scroll")
 
 
@@ -99,7 +106,7 @@ def _try_expand_their_turn(frames: list[bytes]) -> bytes | None:
     """
     if not frames:
         return None
-    adb.tap(540, 1264)
+    adb.tap(*config.COORDS["matches_expand_their_turn"])
     adb.jitter_sleep("after_tap")
     time.sleep(0.6)
     return adb.screenshot()

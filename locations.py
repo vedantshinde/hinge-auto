@@ -36,15 +36,17 @@ import config
 
 
 _COORDS_FILE = config.BASE_DIR / "location_coords.json"
+
+# Label that must be on screen after this flow's first navigation tap
+# (ui.require_label). Read from the phone with ui.ui_texts(); None =
+# not captured yet, check skipped.
+NEIGHBORHOOD_LABEL: str | None = "My neighbourhood"
 _NAMES_FILE = config.BASE_DIR / "locations.json"
 
 
 def load_coords() -> dict:
-    if not _COORDS_FILE.exists():
-        raise RuntimeError(
-            f"{_COORDS_FILE.name} not found. Run `python calibrate_locations.py` first."
-        )
-    return json.loads(_COORDS_FILE.read_text())
+    return config.load_device_json(
+        _COORDS_FILE, "fill location_coords.json from phone screenshots")
 
 
 def load_names() -> dict:
@@ -74,8 +76,37 @@ def get_rotation(name: str) -> list[str]:
     return rotations[name]
 
 
-def is_out_of_candidates(png: bytes) -> bool:
-    """Check for the 'You've seen everyone for now' empty-state screen.
+# Exact on-screen label of Hinge's "seen everyone" empty state on the
+# phone, read with ui.ui_texts() the first time it's seen. While None,
+# --rotate refuses to start on a non-emulator device.
+EMPTY_STATE_LABEL: str | None = None
+
+
+def is_out_of_candidates(png: bytes, nodes: list | None = None) -> bool:
+    """True on Hinge's 'You've seen everyone for now' empty-state screen.
+
+    Emulator: the pixel check below alone. Phone: the pixel check is only a
+    cheap pre-filter — the S23's (26,26,26) photo heart can sit in the same
+    patch — so it must also find EMPTY_STATE_LABEL among the on-screen
+    labels (`nodes`, or a fresh ui.ui_texts() dump).
+    """
+    if not _empty_state_pixels(png):
+        return False
+    if config.DEVICE == "emulator":
+        return True
+    if EMPTY_STATE_LABEL is None:
+        return False
+    import ui
+    if nodes is None:
+        try:
+            nodes = ui.ui_texts()
+        except ui.UiDumpFailed:
+            return False
+    return ui.find_label(nodes, EMPTY_STATE_LABEL) is not None
+
+
+def _empty_state_pixels(png: bytes) -> bool:
+    """Pixel check for the 'You've seen everyone for now' empty-state screen.
 
     Identified by the solid black 'Change filters' pill button at the
     center of the screen. The button spans roughly x=120-960, y=1400-1500
@@ -120,11 +151,16 @@ def set_location(name: str) -> None:
     time.sleep(1.0)
 
     # 1. Discover -> sliders icon -> Dating Preferences
-    adb.tap(*coords["sliders_icon"])
+    adb.tap(*coords["sliders_icon"], target="sliders_icon")
     time.sleep(d["after_sliders_tap"])
+    import ui
+    nodes = ui.require_label(NEIGHBORHOOD_LABEL, step="location: Dating Preferences")
 
-    # 2. Tap "My neighborhood" row -> Location picker
-    adb.tap(*coords["neighborhood_row"])
+    # 2. Tap "My neighborhood" row -> Location picker. Prefer the label's
+    # live position: a dismissible banner above the rows shifts them.
+    row = ui.find_label(nodes, NEIGHBORHOOD_LABEL) if nodes else None
+    adb.tap(*(row.center if row else coords["neighborhood_row"]),
+            target="neighborhood_row")
     time.sleep(d["after_neighborhood_tap"])
 
     # 3. Tap text input

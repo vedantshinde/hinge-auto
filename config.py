@@ -39,7 +39,7 @@ PREMADES: list[dict] = []
 #     you haven't tuned. Once decisions look right, flip back to False.
 #   - Hinge+ (unlimited likes): NO. Just run small live batches
 #     (MAX_LIKES_PER_SESSION = 5) and Ctrl-C if something looks off.
-DRY_RUN = False
+DRY_RUN = True
 
 # Default = 8, which matches free-tier Hinge's daily like cap (resets at
 # 4am local). One session per day exhausts the free allotment cleanly.
@@ -103,6 +103,95 @@ COORDS = {
     # Discover filter row (tap the chip to open its bottom sheet).
     "sliders_icon":      (95, 225),     # opens Dating Preferences
     "age_chip":          (460, 225),    # opens Age filter sheet
+
+    # Matches tab (matches_scan.py): scroll gesture through the list and
+    # the 'Their turn' section header that expands it.
+    "matches_scroll_from":       (540, 1900),
+    "matches_scroll_to":         (540, 1500),
+    "matches_expand_their_turn": (540, 1264),
+}
+
+# Compose card geometry, relative to the Send Like button's center:
+#   comment_dy  — comment input center sits this many px above Send Like
+#   text_window — (top, bottom) px above Send Like bounding the rows where
+#                 typed comment text appears (used to verify typing landed)
+#   text_min_pixels — near-black pixels in that window that mean "text is
+#                 there" (above the blinking cursor's ~150-300). Not
+#                 length-scaled: the S23 box scrolls and shows ~2 lines
+#                 however long the opener is (real typed boxes: 1614, 2424).
+COMPOSE = {
+    "comment_dy": 171,
+    "text_window": (230, 60),
+    "text_min_pixels": 600,
+}
+
+# Age-filter sheet geometry used by calibrate_filters.py (emulator values;
+# devices override via their profile's "filter_cal").
+FILTER_CAL = {
+    "slider_y": 1720,
+    "apply_button": (540, 2240),
+    "dismiss_tap": (540, 400),
+}
+
+# Back taps from the self-profile View tab to a screen with the bottom nav
+# (scan_self.return_to_discover).
+SELF_VIEW_BACK_TAPS = 2
+
+# ---------- Device selection ----------
+# Which device to drive. "emulator" uses the defaults above. Any other
+# profile pins adb to its serial (so a running emulator can't steal the
+# taps) and overrides the screen size + whichever COORDS differ.
+DEVICE = "galaxy_s23"
+
+# adb serial to target; None = adb's default (first/only device).
+ADB_SERIAL: str | None = None
+
+# Dark/white pixel counts in the 120x120 patch at COORDS["skip_button"]
+# (see main.skip_patch_counts). main.preflight compares the live screen to
+# this (+-10%) to catch a moved layout before the loop taps anything.
+# None = skip that check.
+SKIP_FINGERPRINT: dict | None = None
+
+DEVICES = {
+    "emulator": {},
+    # Samsung Galaxy S23 (SM-S911B), Android 15 / One UI 7, 1080x2340.
+    # Hinge doesn't set FLAG_SECURE here, so plain `adb screencap` works.
+    "galaxy_s23": {
+        "serial": "RZCX920XP8L",
+        "screen": (1080, 2340),
+        "skip_fingerprint": {"dark": 1657, "white": 12500},
+        # Measured from screencap on 2026-11-01. Heart / Send Like are
+        # found by vision.py at tap-time; these are the static targets.
+        "coords": {
+            "skip_button":   (152, 1865),   # floating X, bottom-left
+            "heart_photo_1": (917, 1388),
+            "nav_discover":  (110, 2106),
+            "nav_standouts": (323, 2106),
+            "nav_likes_you": (536, 2106),
+            "nav_matches":   (749, 2106),
+            "nav_self_pfp":  (966, 2106),
+            "sliders_icon":  (101, 180),
+            "age_chip":      (529, 180),
+            # Profile Hub avatar -> profile editor 'View' tab; one Back from
+            # View returns to Profile Hub (labels "Profile", "View", "Back").
+            "self_avatar":   (540, 484),
+            "view_tab":      (810, 287),
+            "back_arrow":    (78, 142),
+        },
+        "self_view_back_taps": 1,
+        # Age sheet (labels "Minimum age"/"Maximum age" at y 1336,
+        # "Apply filter", scrim "Close sheet" above y 563).
+        "filter_cal": {
+            "slider_y": 1336,
+            "apply_button": (540, 2052),
+            "dismiss_tap": (540, 281),
+        },
+        # Comment box spans y 868-1068 with Send Like centered at 1168.
+        "compose": {
+            "comment_dy": 200,
+            "text_window": (290, 110),
+        },
+    },
 }
 
 # ---------- Timing ----------
@@ -128,6 +217,35 @@ JUDGE_BACKEND = "anthropic"
 MODEL = "claude-sonnet-4-6"
 EFFORT = "medium"  # low | medium | high
 
+# ---------- Opener generation (both backends) ----------
+# Stage 1 (the vision call) drafts up to OPENER_CANDIDATES openers (max 4);
+# a free deterministic filter then drops bad ones, and stage 2 (one or two
+# text-only calls per like) picks one or asks for a rewrite. Rewrite cap: at
+# most one rewrite; OPENER_RETRY above 1 has no effect. Any failure means a
+# like with no comment, never a skip.
+OPENER_CANDIDATES = 3
+OPENER_RETRY = 1
+# OPENER_SELECT = False skips stage 2 and sends the stage-1 pick if it passes
+# the deterministic filter. Weaker: it LOSES the semantic checks (invented
+# shared experience / sender biography, reads like a line, makes sense on
+# photo 1) that only stage 2 performs.
+OPENER_SELECT = True
+
+# Profile identity (spec §6): the judged profile's top-of-profile thumbnail
+# (grayscale, region crop of frames[0], resized to thumb_size = (w, h)) must
+# near-match the live top view (mean abs diff <= thumb_max_diff, 0-255)
+# before any heart tap; after Send, a near-match means "not advanced".
+IDENTITY = {"thumb_size": (64, 128), "thumb_max_diff": 6.0}
+
+# Prompt targeting (spec §6, phone only): accept the best "Prompt:" node
+# scoring >= prompt_min_score against the opener's anchor whose normalised
+# question alone has difflib ratio >= question_min_ratio; scan at most
+# max_scroll_steps scrolls down from the top; a heart whose y is below
+# low_y_frac * screen height gets one nudge scroll before the tap (the
+# compose card opens downward from the tapped heart).
+TARGET = {"prompt_min_score": 0.8, "question_min_ratio": 0.9,
+          "max_scroll_steps": 7, "low_y_frac": 0.55}
+
 # ---------- Ollama settings (when JUDGE_BACKEND == "ollama") ----------
 # Vision-capable models that handle multiple images per turn:
 #   "qwen2.5-vl"        — strong all-around vision model (recommended)
@@ -144,7 +262,16 @@ OLLAMA_HOST = None
 BASE_DIR = Path(__file__).parent
 DEBUG_DIR = BASE_DIR / "debug"
 SCREENSHOTS_DIR = BASE_DIR / "screenshots"
+RUNS_DIR = DEBUG_DIR / "runs"  # per-run logs (runlog.py); kept permanently
 SAVE_DEBUG_FRAMES = True  # keep frames + decisions in debug/ for review
+# debug/openers.html is rewritten after every like; an open tab reloads
+# every this many seconds (0 = no reload tag).
+OPENERLOG_HTML_REFRESH = 30
+
+# Pre-like identity check: re-read a missing "Skip <name>" label this many
+# times, waiting this many seconds first, before halting the run.
+IDENTITY_RETRIES = 2
+IDENTITY_RETRY_WAIT = 4
 
 
 def _apply_mode() -> None:
@@ -169,4 +296,37 @@ def _apply_mode() -> None:
             g[k] = v
 
 
+def load_device_json(path: Path, calibrate_hint: str) -> dict:
+    """Load a per-device coords JSON, refusing one calibrated for a
+    different screen (e.g. emulator coords while DEVICE is the phone)."""
+    import json
+    if not path.exists():
+        raise RuntimeError(f"{path.name} not found. Run `{calibrate_hint}` first.")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    want = [SCREEN_WIDTH, SCREEN_HEIGHT]
+    got = list(data.get("screen_size") or [])
+    if got != want:
+        raise RuntimeError(
+            f"{path.name} was calibrated for {got[0] if got else '?'}x"
+            f"{got[1] if len(got) > 1 else '?'}, current device is "
+            f"{want[0]}x{want[1]} — recalibrate (`{calibrate_hint}`)."
+        )
+    return data
+
+
+def _apply_device() -> None:
+    """Overlay the DEVICE profile onto ADB_SERIAL / SCREEN_* / COORDS."""
+    profile = DEVICES[DEVICE]
+    g = globals()
+    g["ADB_SERIAL"] = profile.get("serial")
+    g["SKIP_FINGERPRINT"] = profile.get("skip_fingerprint")
+    if "screen" in profile:
+        g["SCREEN_WIDTH"], g["SCREEN_HEIGHT"] = profile["screen"]
+    COORDS.update(profile.get("coords", {}))
+    COMPOSE.update(profile.get("compose", {}))
+    FILTER_CAL.update(profile.get("filter_cal", {}))
+    g["SELF_VIEW_BACK_TAPS"] = profile.get("self_view_back_taps", 2)
+
+
 _apply_mode()
+_apply_device()
